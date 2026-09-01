@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Google Morse Trainer (Gboard Edition)</title>
+  <style>
+    :root {
+      --bg-color: #f8f9fa;
+      --card-bg: #ffffff;
+      --text-main: #202124;
+      --accent-blue: #1a73e8;
+      --accent-green: #34a853;
+      --accent-red: #ea4335;
+      --hint-bg: #f1f3f4;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      min-height: 100vh;
+      box-sizing: border-box;
+    }
+
+    #keyboard-trigger {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+      top: -9999px;
+      left: -9999px;
+    }
+
+    .app-card {
+      background: var(--card-bg);
+      width: 90%;
+      max-width: 480px;
+      border-radius: 20px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      padding: 2rem;
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      transition: border-color 0.2s ease;
+      border: 3px solid transparent;
+      margin-top: 2rem;
+    }
+
+    .app-card:focus-within, .app-card:active {
+      border-color: var(--accent-blue);
+    }
+
+    .instruction-tag {
+      font-size: 0.85rem;
+      color: #70757a;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 1.5rem;
+    }
+
+    .word-display {
+      font-size: 3rem;
+      font-weight: 700;
+      letter-spacing: 0.4rem;
+      margin-bottom: 2rem;
+      word-break: break-all;
+    }
+
+    .letter {
+      color: #dadce0;
+      transition: color 0.2s ease;
+    }
+
+    .letter.active {
+      color: var(--accent-blue);
+      text-decoration: underline;
+      text-underline-offset: 8px;
+    }
+
+    .letter.correct {
+      color: var(--accent-green);
+    }
+
+    .letter.error {
+      color: var(--accent-red);
+    }
+
+    .hint-box {
+      background-color: var(--hint-bg);
+      border-radius: 12px;
+      padding: 1.25rem;
+      min-height: 100px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.3s ease;
+    }
+
+    .hint-box.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .hint-title {
+      font-size: 0.9rem;
+      color: #5f6368;
+      margin-bottom: 0.25rem;
+    }
+
+    .hint-morse {
+      font-size: 1.8rem;
+      font-weight: 800;
+      letter-spacing: 0.2rem;
+      color: var(--accent-blue);
+    }
+
+    .hint-mnemonic {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #3c4043;
+      margin-top: 0.25rem;
+    }
+
+    .score-tracker {
+      margin-top: 1.5rem;
+      font-size: 0.9rem;
+      color: #70757a;
+    }
+  </style>
+</head>
+<body>
+
+  <input type="text" id="keyboard-trigger" autocomplete="off" />
+
+  <div class="app-card" id="interactive-zone">
+    <div class="instruction-tag">Tap to Open Keyboard & Type</div>
+    
+    <div class="word-display" id="word-container"></div>
+
+    <div class="hint-box" id="hint-container">
+      <div class="hint-title">STUCK? MORSE MNEMONIC:</div>
+      <div class="hint-morse" id="hint-morse"></div>
+      <div class="hint-mnemonic" id="hint-mnemonic"></div>
+    </div>
+
+    <div class="score-tracker" id="score-display">Words Solved: 0</div>
+  </div>
+
+  <script>
+    // 1. Full Letter Mnemonics & Exponential Rarity Weights
+    // Rare letters like Q, X, Z, J, V are heavily prioritized
+    const MORSE_MAP = {
+      A: { morse: ".-", mnemonic: "Archery", weight: 1.0 },
+      B: { morse: "-...", mnemonic: "Banjo", weight: 4.0 },
+      C: { morse: "-.-.", mnemonic: "Candy", weight: 3.5 },
+      D: { morse: "-..", mnemonic: "Dog", weight: 1.5 },
+      E: { morse: ".", mnemonic: "Eye", weight: 1.0 },
+      F: { morse: "..-.", mnemonic: "Fireman", weight: 3.5 },
+      G: { morse: "--.", mnemonic: "Giraffe", weight: 3.5 },
+      H: { morse: "....", mnemonic: "Hippo", weight: 1.5 },
+      I: { morse: "..", mnemonic: "Insect", weight: 1.0 },
+      J: { morse: ".---", mnemonic: "Jet", weight: 7.0 },
+      K: { morse: "-.-", mnemonic: "Kite", weight: 4.5 },
+      L: { morse: ".-..", mnemonic: "Lemon", weight: 1.5 },
+      M: { morse: "--", mnemonic: "Mustache", weight: 1.5 },
+      N: { morse: "-.", mnemonic: "Net", weight: 1.0 },
+      O: { morse: "---", mnemonic: "Orchestra", weight: 1.0 },
+      P: { morse: ".--.", mnemonic: "Paddle", weight: 3.5 },
+      Q: { morse: "--.-", mnemonic: "Quarter", weight: 8.0 },
+      R: { morse: ".-.", mnemonic: "Robot", weight: 1.0 },
+      S: { morse: "...", mnemonic: "Submarine", weight: 1.0 },
+      T: { morse: "-", mnemonic: "Tape", weight: 1.0 },
+      U: { morse: "..-", mnemonic: "Unicorn", weight: 1.5 },
+      V: { morse: "...-", mnemonic: "Vacuum", weight: 6.0 },
+      W: { morse: ".--", mnemonic: "Wand", weight: 3.5 },
+      X: { morse: "-..-", mnemonic: "X-ray", weight: 8.0 },
+      Y: { morse: "-.--", mnemonic: "Yard", weight: 4.5 },
+      Z: { morse: "--..", mnemonic: "Zebra", weight: 8.0 }
+    };
+
+    // Heavy concentration of uncommon letter words + complex terms
+    const WORD_LIST = [
+      // Rare Letter Focus (Q, X, Z, J, V, K, Y, W, B, P, F, G)
+      "QUARTZ", "EQUINOX", "JUXTAPOSE", "ZODIAC", "BIZARRE", "QUALM", "WHIZ", "PIXEL",
+      "VORTEX", "QUICK", "QUIET", "QUIVER", "QUEEN", "QUOTA", "QUARTER", "ACQUIRE",
+      "SQUEEZE", "LIQUID", "UNIQUE", "OPAQUE", "SQUAD", "QUEST", "QUAKE", "EQUIP",
+      "XEROX", "OXYGEN", "COMPLEX", "EXPECT", "EXAMINE", "EXPLAIN", "EXCELLENT", "EXCHANGE",
+      "EXECUTIVE", "EXPRESS", "EXTEND", "EXTRA", "EXPOSE", "EXPAND", "EXPATRIATE", "EXEMPT",
+      "ZERO", "ZIGZAG", "ZEBRA", "ZONE", "ZINC", "ZENITH", "GAZE", "PRAZE", "PRIZE",
+      "FREEZE", "BREEZE", "DOZEN", "CRAZY", "PUZZLE", "HAZARD", "CITIZEN", "SREEZE",
+      "JACKET", "JUNGLE", "JOURNEY", "JUDGE", "JUICE", "JUMP", "JULY", "JUNE", "JOY",
+      "PROJECT", "OBJECT", "SUBJECT", "MAJOR", "INJURY", "ADJUST", "REJECT", "JOIN",
+      "VACUUM", "VALLEY", "VALUABLE", "VANISH", "VARIETY", "VEGETABLE", "VEHICLE", "VELVET",
+      "VENTURE", "VERIFY", "VERSION", "VESSEL", "VICTORY", "VILLAGE", "VIOLENT", "VIRTUAL",
+      "VIRUS", "VISIBLE", "VISION", "VISIT", "VISUAL", "VITAL", "VIVID", "VOCAL", "VOLUME",
+      "KNIGHT", "KITCHEN", "KNOWLEDGE", "KINGDOM", "KNIFE", "KNOCK", "KNOT", "KEYBOARD",
+      "YESTERDAY", "YELLOW", "YOUTH", "YIELD", "YACHT", "YEARN", "BEYOND", "LANYARD",
+      "WIZARD", "WEAPON", "WEATHER", "WEBSITE", "WEEKEND", "WEIGHT", "WELCOME", "WHISTLE",
+      "BLANKET", "BLOSSOM", "BOUND", "BRIGHT", "BROKEN", "BRONZE", "BUDGET", "BUFFALO",
+      "PACKET", "PARADOX", "PARALLEL", "PASSAGE", "PATIENT", "PATTERN", "PENGUIN", "PHYSICS",
+      "FABRIC", "FACTORY", "FAILURE", "FAITHFUL", "FALCON", "FANTASY", "FATHER", "FEATHER",
+      "GARAGE", "GARDEN", "GATHER", "GENERAL", "GIRAFFE", "GLACIER", "GLIMPSE", "GLORY",
+      
+      // Complex & Multi-syllable Words
+      "ADMINISTRATION", "ARCHITECTURE", "CHARACTERISTIC", "CIRCUMSTANCE", "CIVILIZATION",
+      "COMMUNICATION", "COMPREHENSIVE", "CONCENTRATION", "CONFERENCE", "CONGRESSIONAL",
+      "CONSIDERATION", "CONSTITUTIONAL", "CONTEMPORARY", "DEVELOPMENT", "DISCRIMINATION",
+      "ENVIRONMENTAL", "ESTABLISHMENT", "EXTRAORDINARY", "IDENTIFICATION", "IMPLEMENTATION",
+      "INFRASTRUCTURE", "INVESTIGATION", "MANUFACTURING", "ORGANIZATION", "PARTICULARLY",
+      "PHILOSOPHY", "PSYCHOLOGY", "RECOMMENDATION", "REPRESENTATIVE", "RESPONSIBILITY",
+      "SATISFACTION", "SIGNIFICANTLY", "SPECIFICATION", "TRANSPORTATION", "UNDERSTANDING",
+      
+      // Standard Practice Words
+      "ABILITY", "ABSOLUTE", "ACADEMIC", "ACCIDENT", "ACCOMPANY", "ACCOMPLISH", "ACCORDING",
+      "ACCURATE", "ACHIEVE", "ACTIVITY", "ADAPTATION", "ADDITIONAL", "ADJUSTMENT", "ADVOCATE",
+      "AFFORDABLE", "AGGRESSIVE", "ALGORITHM", "ALIGNMENT", "ALLOCATION", "ALPHABET", "ALTITUDE",
+      "AMBITIOUS", "AMPLITUDE", "ANALYSIS", "ANECDOTE", "ANOTHER", "ANXIETY", "APPARENT",
+      "APPEARANCE", "APPLICATION", "APPRECIATE", "APPROACH", "APPROPRIATE", "APPROVAL", "ARCHITECT",
+      "ARGUMENT", "ARTIFICIAL", "ASSEMBLY", "ASSESSMENT", "ASSIGNMENT", "ASSISTANCE", "ASSOCIATE",
+      "ASTRONAUT", "ATMOSPHERE", "ATTACHMENT", "ATTEMPT", "ATTRACTIVE", "AUDIENCE", "AUTHENTIC",
+      "AUTHORITY", "AUTOMATIC", "AVAILABLE", "BACKSTAGE", "BAGEL", "BALANCE", "BANDWIDTH",
+      "BARGAIN", "BASEBALL", "BASKETBALL", "BATTERY", "BEAUTIFUL", "BEGINNING", "BENEFICIAL",
+      "BETWEEN", "BIOLOGY", "BITTER", "BLANKET", "BLUEPRINT", "BOOKCASE", "BORDER", "BOTANY",
+      "BOUNDARY", "BRIGHTNESS", "BROADCAST", "BUILDING", "BULLETIN", "BUSINESS", "CABINET",
+      "CALCULATE", "CAMPAIGN", "CANVAS", "CAPABILITY", "CAPACITY", "CAPITAL", "CAPTION",
+      "CAPTURE", "CARAVAN", "CARBON", "CATEGORY", "CAUTIOUS", "CELEBRATE", "CELLULAR",
+      "CENTURY", "CEREMONY", "CERTAINLY", "CHALLENGE", "CHAMBER", "CHAMPION", "CHARACTER",
+      "CHEMICAL", "CHEMISTRY", "CHIMNEY", "CHOCOLATE", "CHRONICLE", "CIRCUIT", "CIRCULAR",
+      "CLASSROOM", "CLEVER", "CLIMATE", "CLINICAL", "CLUSTER", "COALITION", "COGNITIVE",
+      "COLLAPSE", "COLLEAGUE", "COLLECTION", "COLLEGE", "COLLISION", "COLONIAL", "COMBINATION",
+      "COMEDY", "COMFORTABLE", "COMMANDER", "COMMERCE", "COMMISSION", "COMMITMENT", "COMMUNITY",
+      "COMPARISON", "COMPASSION", "COMPETITION", "COMPLAINT", "COMPLETION", "COMPLEXITY", "COMPONENT",
+      "COMPOSITE", "COMPREHEND", "COMPUTER", "CONCENTRATE", "CONCEPTUAL", "CONCLUSION", "CONDITION",
+      "CONFIDENCE", "CONFIRMATION", "CONGRATS", "CONNECTION", "CONSCIENCE", "CONSCIOUS", "CONSENSUS",
+      "CONSEQUENCE", "CONSERVATION", "CONSIDERABLE", "CONSISTENT", "CONSTANTLY", "CONSTRAIN", "CONSTRUCT",
+      "CONSULTANT", "CONSUMPTION", "CONTAINER", "CONTENTION", "CONTINENT", "CONTINUOUS", "CONTRACTOR",
+      "CONTRIBUTE", "CONVENTION", "CONVERSION", "CONVINCE", "COOPERATION", "COORDINATE", "CORPORATE",
+      "CORRECTLY", "CORRESPOND", "CORRUPTION", "CRITICAL", "CULTURAL", "CURIOSITY", "CURRENTLY",
+      "CUSTOMER", "CYLINDER", "DATABASE", "DAYLIGHT", "DECEASED", "DECISION", "DECLARATION",
+      "DECREASE", "DEDICATION", "DEFENDANT", "DEFICIENCY", "DEFINITELY", "DEFINITION", "DELEGATION",
+      "DELIBERATE", "DELICATE", "DELIVERY", "DEMOCRACY", "DEPARTMENT", "DEPENDENT", "DEPOSIT",
+      "DEPRESSION", "DESCRIPTION", "DESPERATE", "DESTINATION", "DESTRUCTION", "DETAILED", "DETECTION",
+      "DETERMINE", "DEVASTATE", "DIAGNOSIS", "DIAGRAM", "DIALOGUE", "DIAMETER", "DICTIONARY",
+      "DIMENSION", "DIRECTION", "DIRECTORY", "DISASTER", "DISCIPLINE", "DISCOVER", "DISCUSSION",
+      "DISORDER", "DISPLAY", "DISTANCE", "DISTINCT", "DISTRIBUTE", "DIVERSITY", "DOCUMENT",
+      "DOMESTIC", "DOMINANT", "DRAMATIC", "DUPLICATE", "DYNAMICS", "EARNEST", "EARTHQUAKE",
+      "ECONOMIC", "EDUCATION", "EFFECTIVE", "EFFICIENCY", "ELASTIC", "ELECTION", "ELECTRICAL",
+      "ELEGANT", "ELEMENTARY", "ELEVATION", "ELIGIBLE", "ELIMINATE", "EMERGENCY", "EMISSION",
+      "EMOTIONAL", "EMPHASIS", "EMPLOYMENT", "ENCOUNTER", "ENCOURAGE", "ENDEAVOR", "ENDURANCE",
+      "ENERGETIC", "ENGINEER", "ENORMOUS", "ENTERPRISE", "ENTIRELY", "ENTITLED", "ENTITY",
+      "EQUIPMENT", "EQUIVALENT", "ERRONEOUS", "ESCAPE", "ESSENTIAL", "ESTIMATE", "EVALUATE",
+      "EVENLY", "EVENTUALLY", "EVIDENCE", "EVOLUTION", "EXACTLY", "EXCEED", "EXCELLENCE",
+      "EXCEPTION", "EXCESSIVE", "EXCITEMENT", "EXCLUSIVE", "EXECUTION", "EXHAUST", "EXHIBITION",
+      "EXISTENCE", "EXPEDITION", "EXPENSE", "EXPERIENCE", "EXPERIMENT", "EXPERT", "EXPLORATION",
+      "EXPONENT", "EXPRESSION", "EXTENSION", "EXTENSIVE", "EXTERNAL", "EXTINCT", "EXTRACT",
+      "EXTREME", "FACILITATE", "FACILITY", "FACTION", "FACTOR", "FACULTY", "FAIRNESS",
+      "FAMILIAR", "FANTASTIC", "FASCINATE", "FAVORITE", "FEASIBILITY", "FEATURE", "FEDERAL",
+      "FEEDBACK", "FESTIVAL", "FICTIONAL", "FILAMENT", "FINANCIAL", "FIREWALL", "FIRSTHAND",
+      "FLEXIBLE", "FLIGHT", "FLOURISH", "FLUCTUATE", "FORECAST", "FORENSIC", "FORMULA",
+      "FORTUNATE", "FOUNDATION", "FRACTION", "FRAGMENT", "FRAMEWORK", "FREQUENCY", "FRICTION",
+      "FUNCTIONAL", "FUNDAMENTAL", "FURNITURE", "GALLERY", "GATHERING", "GENERATION", "GENEROUS",
+      "GENETIC", "GENUINE", "GEOGRAPHY", "GEOMETRY", "GIGABYTE", "GLAMOUR", "GLOSSARY",
+      "GOVERNMENT", "GRADUAL", "GRAVITATION", "GUARANTEE", "GUIDANCE", "HABITAT", "HARDWARE",
+      "HARMONY", "HEADQUARTERS", "HEATING", "HEAVILY", "HEIGHT", "HERITAGE", "HIERARCHY",
+      "HIGHLIGHT", "HISTORICAL", "HORIZON", "HOSPITAL", "HOUSEHOLD", "HUMANITY", "HURRICANE",
+      "HYDRAULIC", "HYDROGEN", "HYPOTHESIS", "IDENTITY", "ILLUSTRATE", "IMAGINATION", "IMMEDIATE",
+      "IMMIGRANT", "IMMUNITY", "IMPACT", "IMPATIENT", "IMPERIAL", "IMPORTANCE", "IMPRESSION",
+      "IMPROVEMENT", "INCENTIVE", "INCIDENT", "INCLINE", "INCORPORATE", "INDEPENDENT", "INDICATE",
+      "INDIVIDUAL", "INDUSTRIAL", "INFECTION", "INFLATION", "INFLUENCE", "INFORMAL", "INHERIT",
+      "INITIATIVE", "INNOVATION", "INSPECTION", "INSPIRATION", "INSTITUTE", "INSTRUCTION", "INSURANCE",
+      "INTEGRITY", "INTELLECT", "INTENSIVE", "INTERACT", "INTEREST", "INTERIOR", "INTERNAL",
+      "INTERVAL", "INTERVIEW", "INVENTORY", "INVESTMENT", "INVISIBLE", "IRRIGATE", "ISOLATION",
+      "JOURNALISM", "JUDICIAL", "JUNCTION", "JURISDICTION", "JUSTICE", "KEYSTONE", "KINETIC",
+      "LABORATORY", "LANDSCAPE", "LANGUAGE", "LATITUDE", "LAUNCH", "LEADERSHIP", "LEGENDARY",
+      "LEGISLATION", "LEGITIMATE", "LIFESTYLE", "LIMITATION", "LINGUISTIC", "LITERATURE", "LOCATION",
+      "LOCOMOTIVE", "LOGISTICAL", "LONGITUDE", "LUMINOSITY", "LUXURIOUS", "MACHINERY", "MAGNITUDE",
+      "MAINTENANCE", "MANAGEMENT", "MANDATORY", "MANUSCRIPT", "MARGINAL", "MATERIAL", "MATHEMATICS",
+      "MEASUREMENT", "MECHANICAL", "MECHANISM", "MEMBERSHIP", "MEMORABLE", "MENTAL", "MERCHANT",
+      "METABOLISM", "METAPHOR", "METHODOLOGY", "MICROPHONE", "MICROSCOPE", "MIGRATION", "MILITARY",
+      "MINIATURE", "MINIMUM", "MINORITY", "MISSION", "MOLECULE", "MONITOR", "MONUMENT",
+      "MOTIVATION", "MOVEMENT", "MULTIPLY", "MUNICIPAL", "NARRATIVE", "NATIONAL", "NAVIGATION",
+      "NECESSARY", "NEGOTIATE", "NEIGHBOR", "NETWORK", "NEUTRAL", "NOMINATION", "NONPROFIT",
+      "NORMALLY", "NOTATION", "NOVEMBER", "NUMEROUS", "NUTRITION", "OBJECTIVE", "OBLIGATION",
+      "OBSERVE", "OBSTACLE", "OCCASION", "OCCUPATION", "OFFENSIVE", "OFFICIAL", "OPERATE",
+      "OPPONENT", "OPPORTUNITY", "OPTICAL", "OPTIMISTIC", "ORDINARY", "ORGANISM", "ORIGINAL",
+      "OUTCOME", "OUTLINE", "OVERCOME", "OVERHEAD", "PACIFIC", "PANEL", "PARAGRAPH",
+      "PARALLEL", "PARAMETER", "PARLIAMENT", "PARTICLE", "PARTNER", "PASSENGER", "PATHWAY",
+      "PATIENT", "PERCENTAGE", "PERFECTLY", "PERFORMANCE", "PERIODIC", "PERMANENT", "PERMISSION",
+      "PERSONALITY", "PERSPECTIVE", "PETROLEUM", "PHENOMENON", "PHILOSOPHY", "PHOTOGRAPH", "PHYSICAL",
+      "PICTURE", "PLATFORM", "PLAUSIBLE", "PLEASURE", "POLITICAL", "PORTFOLIO", "POSITION",
+      "POSSIBILITY", "POTENTIAL", "PRACTICAL", "PRECISION", "PREDICT", "PREFERENCE", "PREMISES",
+      "PREPARATION", "PRESENCE", "PRESIDENT", "PRESSURE", "PREVENT", "PREVIOUS", "PRIMARY",
+      "PRINCIPLE", "PRIORITY", "PROCEDURE", "PROCESSING", "PRODUCTION", "PROFESSIONAL", "PROFESSOR",
+      "PROFICIENCY", "PROGRAMMING", "PROGRESS", "PROJECT", "PROMINENT", "PROMOTION", "PROPAGANDA",
+      "PROPORTION", "PROPOSAL", "PROSECUTE", "PROTECTION", "PROTOCOL", "PROTOTYPE", "PROVIDER",
+      "PROXIMITY", "PUBLICATION", "PUNCTUAL", "PURCHASE", "QUALIFIED", "QUANTITY", "QUESTION",
+      "RADIATION", "RADICAL", "RADIOACTIVE", "RAINFALL", "REACTION", "READILY", "REALISTIC",
+      "REASONABLE", "RECEPTION", "RECOGNITION", "RECOMMEND", "RECORDING", "RECOVERY", "RECREATION",
+      "RECRUITMENT", "REDEMPTION", "REFERENCE", "REFLECTION", "REFORM", "REFUGEE", "REGARDLESS",
+      "REGIONAL", "REGULATION", "REINFORCE", "RELATIONSHIP", "RELATIVE", "RELEVANT", "RELIABLE",
+      "RELIGIOUS", "RELUCTANT", "REMARKABLE", "REMEMBER", "REMOTE", "RENEWABLE", "REPETITION",
+      "REPLACEMENT", "REPORT", "REPRESENT", "REPUBLIC", "REPUTATION", "REQUIREMENT", "RESEARCH",
+      "RESERVATION", "RESIDENTIAL", "RESISTANCE", "RESOLUTION", "RESOURCE", "RESPECTIVE", "RESPONSE",
+      "RESTRICTION", "RESULT", "RETAIL", "RETENTION", "RETIREMENT", "RETRIEVE", "REVENUE",
+      "REVERSE", "REVOLUTION", "RITUAL", "ROBOTIC", "ROUTINE", "SATELLITE", "SCENARIO",
+      "SCHEDULE", "SCHOLARSHIP", "SCIENCE", "SCRUTINY", "SEARCH", "SEASONAL", "SECONDARY",
+      "SECRETARY", "SECURITY", "SELECTION", "SEMANTIC", "SEMINAR", "SENSITIVE", "SEQUENCE",
+      "SIGNIFICANT", "SIMILARITY", "SIMULATION", "SINCERELY", "SOFTWARE", "SOLUTION", "SOPHISTICATED",
+      "SPECIALIST", "SPECIES", "SPECIFIC", "SPECTRUM", "SPECULATION", "SPIRITUAL", "SPONSORSHIP",
+      "STABILITY", "STANDARD", "STATEMENT", "STATIONARY", "STATISTICAL", "STRATEGY", "STRUCTURE",
+      "SUBSTANTIAL", "SUBSTITUTE", "SUBTLETY", "SUCCESSFUL", "SUFFICIENT", "SUGGESTION", "SUPERVISION",
+      "SUPPLEMENT", "SUPPORT", "SUPREME", "SURFACE", "SURGERY", "SURPRISE", "SURRENDER",
+      "SURROUND", "SURVEY", "SUSPECT", "SUSPEND", "SUSTAINABLE", "SYMBOLIC", "SYMMETRY",
+      "SYMPATHY", "SYMPTOM", "SYNTHESIS", "SYSTEMATIC", "TACTICAL", "TALENTED", "TECHNICAL",
+      "TECHNIQUE", "TECHNOLOGY", "TELESCOPE", "TELEVISION", "TEMPERATURE", "TEMPORARY", "TENDENCY",
+      "TERMINAL", "TERRITORY", "TESTIMONY", "TEXTBOOK", "THEOREM", "THERAPY", "THEREFORE",
+      "THERMOMETER", "THOUSAND", "THRESHOLD", "THROUGHOUT", "TOLERANCE", "TOPOLOGY", "TORRENT",
+      "TOXICITY", "TRADITIONAL", "TRAJECTORY", "TRANSACTION", "TRANSFER", "TRANSFORMATION", "TRANSIT",
+      "TRANSLATION", "TRANSMIT", "TRANSPARENT", "TREATMENT", "TREMENDOUS", "TRIANGLE", "TRIUMPH",
+      "TURBULENCE", "ULTIMATE", "UNCERTAIN", "UNDERGROUND", "UNDERLYING", "UNDERTOW", "UNEXPECTED",
+      "UNIFORMITY", "UNIVERSAL", "UNIVERSITY", "UNKNOWN", "UNLIMITED", "URBANIZATION", "URGENCY",
+      "UTILITY", "VACATION", "VALIDITY", "VARIATION", "VELOCITY", "VERTICAL", "VICTIM",
+      "VOLCANO", "VOLTAGE", "VOLUNTEER", "WARRANT", "WARRIOR", "WAVELENGTH", "WEALTHY",
+      "WEATHER", "WESTERN", "WHATEVER", "WIDESPREAD", "WILDLIFE", "WITHDRAW", "WORKFORCE",
+      "WORKSHOP", "WORLDWIDE", "YOUTH", "ZEALOUS", "ZOOLOGY"
+    ];
+
+    // Calculate word weights with an exponential factor for rare letters
+    function calculateWordWeight(word) {
+      let weight = 0;
+      for (const char of word) {
+        weight += MORSE_MAP[char] ? Math.pow(MORSE_MAP[char].weight, 1.3) : 1.0;
+      }
+      return weight;
+    }
+
+    // Pre-calculate cumulative weights for sampling
+    const wordWeights = WORD_LIST.map(calculateWordWeight);
+    const cumulativeWeights = [];
+    let totalWeight = 0;
+
+    for (let i = 0; i < wordWeights.length; i++) {
+      totalWeight += wordWeights[i];
+      cumulativeWeights.push(totalWeight);
+    }
+
+    // Weighted Random Choice Algorithm
+    function getRandomWeightedWord() {
+      const randomValue = Math.random() * totalWeight;
+      for (let i = 0; i < cumulativeWeights.length; i++) {
+        if (randomValue < cumulativeWeights[i]) {
+          return WORD_LIST[i];
+        }
+      }
+      return WORD_LIST[0];
+    }
+
+    let currentWord = "";
+    let currentCharIndex = 0;
+    let wordsSolved = parseInt(localStorage.getItem("morse_words_solved"), 10) || 0;
+    let hintTimer = null;
+    const HINT_DELAY_MS = 2500;
+
+    const interactiveZone = document.getElementById("interactive-zone");
+    const keyTrigger = document.getElementById("keyboard-trigger");
+    const wordContainer = document.getElementById("word-container");
+    const hintContainer = document.getElementById("hint-container");
+    const hintMorse = document.getElementById("hint-morse");
+    const hintMnemonic = document.getElementById("hint-mnemonic");
+    const scoreDisplay = document.getElementById("score-display");
+
+    scoreDisplay.textContent = `Words Solved: ${wordsSolved}`;
+
+    interactiveZone.addEventListener("click", () => {
+      keyTrigger.focus();
+    });
+
+    function loadWord() {
+      currentWord = getRandomWeightedWord();
+      wordContainer.innerHTML = "";
+      for (let i = 0; i < currentWord.length; i++) {
+        const span = document.createElement("span");
+        span.textContent = currentWord[i];
+        span.className = "letter" + (i === 0 ? " active" : "");
+        wordContainer.appendChild(span);
+      }
+      currentCharIndex = 0;
+      hideHint();
+      resetHintTimer();
+    }
+
+    keyTrigger.addEventListener("input", (e) => {
+      const typedChar = e.target.value.slice(-1).toUpperCase();
+      keyTrigger.value = "";
+      
+      if (!typedChar.match(/[A-Z]/)) return;
+
+      const targetChar = currentWord[currentCharIndex];
+      const letters = wordContainer.children;
+
+      if (typedChar === targetChar) {
+        letters[currentCharIndex].className = "letter correct";
+        currentCharIndex++;
+        hideHint();
+
+        if (currentCharIndex < currentWord.length) {
+          letters[currentCharIndex].className = "letter active";
+          resetHintTimer();
+        } else {
+          clearTimeout(hintTimer);
+          wordsSolved++;
+          localStorage.setItem("morse_words_solved", wordsSolved);
+          scoreDisplay.textContent = `Words Solved: ${wordsSolved}`;
+          setTimeout(loadWord, 400);
+        }
+      } else {
+        letters[currentCharIndex].className = "letter active error";
+        setTimeout(() => {
+          if (letters[currentCharIndex]) letters[currentCharIndex].className = "letter active";
+        }, 400);
+      }
+    });
+
+    function resetHintTimer() {
+      clearTimeout(hintTimer);
+      hintTimer = setTimeout(showHint, HINT_DELAY_MS);
+    }
+
+    function showHint() {
+      const char = currentWord[currentCharIndex];
+      const data = MORSE_MAP[char];
+
+      if (data) {
+        hintMorse.textContent = data.morse;
+        hintMnemonic.textContent = `${char} = ${data.mnemonic}`;
+        hintContainer.classList.add("visible");
+      }
+    }
+
+    function hideHint() {
+      hintContainer.classList.remove("visible");
+    }
+
+    loadWord();
+  </script>
+</body>
+</html>
